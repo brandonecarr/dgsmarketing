@@ -28,7 +28,10 @@ values ('creatives', 'creatives', true)
 on conflict (id) do nothing;
 
 -- Public-read on creatives bucket; tenant members can upload via signed URLs from the app.
-create policy if not exists "creatives_public_read"
+-- Postgres doesn't support `CREATE POLICY IF NOT EXISTS`, so use the
+-- drop-then-create pattern to keep this migration idempotent.
+drop policy if exists "creatives_public_read" on storage.objects;
+create policy "creatives_public_read"
   on storage.objects for select
   using (bucket_id = 'creatives');
 
@@ -37,6 +40,7 @@ insert into storage.buckets (id, name, public)
 values ('qr', 'qr', true)
 on conflict (id) do nothing;
 
-create policy if not exists "qr_public_read"
+drop policy if exists "qr_public_read" on storage.objects;
+create policy "qr_public_read"
   on storage.objects for select
   using (bucket_id = 'qr');
