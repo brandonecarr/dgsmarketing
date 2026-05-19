@@ -1,0 +1,46 @@
+{
+  "name": "@rosie/web",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --turbo --port 3000",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@rosie/ai": "workspace:*",
+    "@rosie/db": "workspace:*",
+    "@rosie/messaging": "workspace:*",
+    "@rosie/ui": "workspace:*",
+    "@supabase/ssr": "^0.5.2",
+    "@supabase/supabase-js": "^2.47.10",
+    "lucide-react": "^0.469.0",
+    "nanoid": "^5.0.9",
+    "next": "15.1.3",
+    "qrcode": "^1.5.4",
+    "resend": "^4.0.1",
+    "stripe": "^17.5.0",
+    "@sentry/nextjs": "^9.16.0",
+    "@upstash/ratelimit": "^2.0.5",
+    "@upstash/redis": "^1.34.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "web-push": "^3.6.7",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^22.10.5",
+    "@types/qrcode": "^1.5.5",
+    "@types/web-push": "^3.6.4",
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.2",
+    "eslint": "^9.17.0",
+    "eslint-config-next": "15.1.3",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.2"
+  }
+}

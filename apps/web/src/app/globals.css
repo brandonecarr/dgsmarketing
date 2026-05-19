@@ -1,0 +1,23 @@
+@import "@rosie/ui/globals.css";
+@source "../../../../packages/ui/src/**/*.{ts,tsx}";
+
+/* Honor the iOS notch / Android display cutouts in standalone (PWA) mode. */
+@supports (padding: max(0px)) {
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+html {
+  background-color: hsl(var(--background));
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Prevent the address-bar-shifting layout jank during scroll on mobile. */
+@media (max-width: 768px) {
+  html,
+  body {
+    overscroll-behavior-y: none;
+  }
+}
