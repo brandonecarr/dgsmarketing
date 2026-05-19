@@ -30,3 +30,4 @@ export * from "./perf";
 export * from "./dlq";
 export * from "./outbound-webhooks";
 export * from "./experiments";
+export * from "./customers";

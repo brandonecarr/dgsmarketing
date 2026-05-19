@@ -13,6 +13,7 @@ import {
   ClipboardList,
   Compass,
   Globe,
+  Map,
   Image as ImageIcon,
   Inbox,
   LayoutDashboard,
@@ -67,6 +68,13 @@ export function AppSidebar({
         { label: "Bulk Messages", href: "/bulk", icon: Megaphone },
         { label: "Commercial Leads", href: "/commercial", icon: ClipboardList },
         { label: "Lead Assistant", href: "/lead-assistant", icon: Bot },
+      ],
+    },
+    {
+      title: "Customers & Routes",
+      links: [
+        { label: "Customers", href: "/customers", icon: Users },
+        { label: "Routes", href: "/routes", icon: Map },
       ],
     },
     {

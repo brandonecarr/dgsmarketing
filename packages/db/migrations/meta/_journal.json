@@ -8,6 +8,13 @@
       "when": 1779196433750,
       "tag": "0000_stale_imperial_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1779217342933,
+      "tag": "0001_goofy_robbie_robertson",
+      "breakpoints": true
     }
   ]
 }
