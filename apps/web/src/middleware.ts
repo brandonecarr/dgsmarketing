@@ -51,9 +51,18 @@ export async function middleware(request: NextRequest) {
 
   let response = NextResponse.next({ request });
 
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !supabaseAnon) {
+    // Without Supabase env vars there's no session to check — let the
+    // request through so the operator at least sees their misconfigured
+    // page render an error rather than a cryptic middleware crash.
+    return response;
+  }
+
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnon,
     {
       cookies: {
         getAll: () => request.cookies.getAll(),
