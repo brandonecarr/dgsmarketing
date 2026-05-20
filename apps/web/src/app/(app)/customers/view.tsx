@@ -49,6 +49,12 @@ export function CustomersView({ initial }: { initial: CustomerRow[] }) {
   const [query, setQuery] = useState("");
   const importRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
+  const [importReport, setImportReport] = useState<{
+    created: number;
+    failed: number;
+    total: number;
+    errors: Array<{ rowIndex: number; error: string }>;
+  } | null>(null);
 
   const visible = useMemo(() => {
     let out = rows;
@@ -76,11 +82,12 @@ export function CustomersView({ initial }: { initial: CustomerRow[] }) {
 
   async function importCsv(file: File) {
     setImporting(true);
+    setImportReport(null);
     try {
       const text = await file.text();
       const records = parseCsv(text);
       if (records.length === 0) {
-        alert("Couldn't read any rows from that CSV.");
+        alert("Couldn't read any rows from that CSV. Check that the first row is a header row.");
         return;
       }
       const res = await fetch("/api/customers/import", {
@@ -93,7 +100,15 @@ export function CustomersView({ initial }: { initial: CustomerRow[] }) {
         alert(j.error ?? "Import failed");
         return;
       }
-      alert(`Imported ${j.created} customers (${j.failed} failed).`);
+      const errors: Array<{ rowIndex: number; error: string }> = (j.report ?? [])
+        .filter((r: { ok: boolean }) => !r.ok)
+        .slice(0, 20);
+      setImportReport({
+        created: j.created ?? 0,
+        failed: j.failed ?? 0,
+        total: j.total ?? records.length,
+        errors,
+      });
       await refresh();
       router.refresh();
     } finally {
@@ -162,6 +177,62 @@ export function CustomersView({ initial }: { initial: CustomerRow[] }) {
             router.refresh();
           }}
         />
+      ) : null}
+
+      {importReport ? (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-semibold">
+                  Import: {importReport.created} of {importReport.total} added
+                  {importReport.failed > 0 ? ` · ${importReport.failed} failed` : ""}
+                </h3>
+                {importReport.failed === 0 ? (
+                  <p className="text-xs text-emerald-700 dark:text-emerald-300">
+                    Everything imported cleanly.
+                  </p>
+                ) : (
+                  <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                    First {importReport.errors.length} errors shown below — the rest are the same
+                    issue.
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => setImportReport(null)}
+                aria-label="Dismiss"
+                className="rounded-md border border-[hsl(var(--border))] px-2 py-1 text-xs"
+              >
+                Dismiss
+              </button>
+            </div>
+          </CardHeader>
+          {importReport.errors.length > 0 ? (
+            <CardBody className="p-0">
+              <ul className="divide-y divide-[hsl(var(--border))]">
+                {importReport.errors.map((e) => (
+                  <li
+                    key={e.rowIndex}
+                    className="flex items-start gap-3 px-5 py-2 text-[12px]"
+                  >
+                    <span className="shrink-0 font-mono text-[10px] text-[hsl(var(--muted-foreground))]">
+                      Row {e.rowIndex + 2}
+                    </span>
+                    <span className="text-red-700 dark:text-red-300">{e.error}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="border-t border-[hsl(var(--border))] bg-[hsl(var(--muted))] px-5 py-3 text-[11px] text-[hsl(var(--muted-foreground))]">
+                Most "name: Required" errors mean your CSV's name column has a different header.
+                Accepted variants: <code>name</code>, <code>Customer</code>, <code>Full Name</code>,{" "}
+                <code>Client</code>. Same flexibility for <code>phone</code> (Phone Number, Mobile),
+                <code> street</code> (Address, Address Line 1), <code>postal</code> (Zip, Zip
+                Code), <code>region</code> (State), and <code>serviceDays</code> (Days, Schedule).
+              </div>
+            </CardBody>
+          ) : null}
+        </Card>
       ) : null}
 
       <Card>

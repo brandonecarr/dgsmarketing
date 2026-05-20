@@ -140,32 +140,105 @@ export async function POST(req: Request) {
 }
 
 /**
- * Light type coercion for CSV-parsed rows: trim strings, parse comma-separated
- * `serviceDays`, coerce price + flatten "address" if the importer passes a
- * single freeform line.
+ * Map common CSV header variants to our canonical field names. Operators
+ * upload exports from Google Sheets / QuickBooks / Excel with headers like
+ * "Full Name", "Phone Number", "Address Line 1", "ZIP", "State" — matching
+ * exactly would reject every row. We lowercase + strip non-alphanumerics
+ * for the lookup so "Service Days" and "service_days" both map to
+ * `serviceDays`.
+ */
+const HEADER_ALIASES: Record<string, string> = {
+  // name
+  name: "name",
+  customer: "name",
+  customername: "name",
+  fullname: "name",
+  client: "name",
+  clientname: "name",
+  // phone
+  phone: "phone",
+  phonenumber: "phone",
+  mobile: "phone",
+  mobilephone: "phone",
+  cell: "phone",
+  cellphone: "phone",
+  contact: "phone",
+  // email
+  email: "email",
+  emailaddress: "email",
+  // address pieces
+  street: "street",
+  address: "street",
+  address1: "street",
+  addressline1: "street",
+  streetaddress: "street",
+  city: "city",
+  town: "city",
+  region: "region",
+  state: "region",
+  province: "region",
+  postal: "postal",
+  postalcode: "postal",
+  zip: "postal",
+  zipcode: "postal",
+  country: "country",
+  // service
+  servicedays: "serviceDays",
+  days: "serviceDays",
+  schedule: "serviceDays",
+  serviceday: "serviceDays",
+  // zone / notes
+  zone: "zone",
+  route: "zone",
+  area: "zone",
+  notes: "notes",
+  note: "notes",
+  comment: "notes",
+  comments: "notes",
+  // price
+  price: "pricePerVisit",
+  pricepervisit: "pricePerVisit",
+  pricepervisitcents: "pricePerVisitCents",
+  rate: "pricePerVisit",
+  cost: "pricePerVisit",
+};
+
+function canonicalKey(raw: string): string | null {
+  const norm = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return HEADER_ALIASES[norm] ?? null;
+}
+
+/**
+ * Normalize + coerce a parsed CSV row. Maps header variants to our canonical
+ * field names, trims strings, parses comma-separated `serviceDays`, and
+ * coerces price into integer cents.
  */
 function coerce(raw: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(raw)) {
+    const canonical = canonicalKey(k);
+    if (!canonical) continue;
     if (typeof v === "string") {
       const t = v.trim();
-      out[k] = t.length === 0 ? undefined : t;
-    } else {
-      out[k] = v;
+      if (t.length === 0) continue;
+      out[canonical] = t;
+    } else if (v !== undefined && v !== null) {
+      out[canonical] = v;
     }
   }
   if (typeof out.serviceDays === "string") {
     out.serviceDays = (out.serviceDays as string)
-      .split(/[,;|]/)
-      .map((s) => s.trim().toLowerCase())
+      .split(/[,;|/]/)
+      .map((s) => s.trim().toLowerCase().slice(0, 3))
       .filter((s): s is ServiceDay => (SERVICE_DAYS as readonly string[]).includes(s));
   }
   if (typeof out.pricePerVisitCents === "string") {
-    const n = Number(out.pricePerVisitCents);
+    const n = Number((out.pricePerVisitCents as string).replace(/[$,]/g, ""));
     out.pricePerVisitCents = Number.isFinite(n) ? Math.round(n) : undefined;
-  } else if (typeof out.pricePerVisit === "string") {
-    // Friendly alias: dollars decimal → cents.
-    const n = Number(out.pricePerVisit);
+  }
+  if (typeof out.pricePerVisit === "string") {
+    // Friendly alias: dollars decimal → cents. Strip $ + thousands commas.
+    const n = Number((out.pricePerVisit as string).replace(/[$,]/g, ""));
     if (Number.isFinite(n)) out.pricePerVisitCents = Math.round(n * 100);
     delete out.pricePerVisit;
   }
