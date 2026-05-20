@@ -17,6 +17,10 @@ const Theme = z.object({
   hidePoweredBy: z.boolean().optional(),
   smsNumber: z.string().min(7).max(30).optional(),
   reviewUrl: z.string().url().optional(),
+  workingDays: z
+    .array(z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]))
+    .max(7)
+    .optional(),
   timezone: z.string().max(64).optional(),
   locale: z.string().max(20).optional(),
 });

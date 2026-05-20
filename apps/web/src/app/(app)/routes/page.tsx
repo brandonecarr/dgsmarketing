@@ -4,11 +4,19 @@ import { RoutesView } from "./view";
 
 export const dynamic = "force-dynamic";
 
+const DEFAULT_WORKING_DAYS = ["mon", "tue", "wed", "thu", "fri"] as const;
+
 export default async function RoutesPage() {
-  await loadActiveSession();
-  // Surface the publishable Mapbox token to the client so the map can render.
-  // No token? The view falls back to a list-only mode.
+  const session = await loadActiveSession();
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? null;
+
+  const theme = (session.tenant.brandTheme ?? {}) as { workingDays?: string[] };
+  const workingDays =
+    theme.workingDays && theme.workingDays.length > 0
+      ? (theme.workingDays as Array<"mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun">)
+      : (DEFAULT_WORKING_DAYS as readonly ("mon" | "tue" | "wed" | "thu" | "fri")[] as Array<
+          "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun"
+        >);
 
   return (
     <div className="space-y-6">
@@ -16,13 +24,14 @@ export default async function RoutesPage() {
         <CardHeader>
           <h2 className="text-xl font-bold">Route management</h2>
           <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
-            Pick a day to see every active customer scheduled for it. Hit{" "}
-            <strong>Optimize</strong> to reorder them by shortest drive time — Rosie calls Mapbox
-            Optimization (≤12 stops) or falls back to a nearest-neighbor sort for larger routes.
+            <strong>Today&apos;s route</strong> shows the customers already scheduled for the
+            selected day and can optimize their visit order. <strong>Weekly planner</strong>{" "}
+            re-assigns every customer across your working days so each day&apos;s route is as
+            geographically tight as possible.
           </p>
         </CardHeader>
       </Card>
-      <RoutesView mapboxToken={mapboxToken} />
+      <RoutesView mapboxToken={mapboxToken} initialWorkingDays={workingDays} />
     </div>
   );
 }

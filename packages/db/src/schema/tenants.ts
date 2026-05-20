@@ -49,6 +49,12 @@ export const tenants = pgTable(
     smsNumber?: string;
     /** Google review URL used by the review-request embed widget. */
     reviewUrl?: string;
+    /**
+     * Days the operator actually runs service routes on. Drives the
+     * /routes weekly planner — k = workingDays.length. Empty / undefined
+     * means "weekdays" (mon–fri).
+     */
+    workingDays?: Array<"mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun">;
   }>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
