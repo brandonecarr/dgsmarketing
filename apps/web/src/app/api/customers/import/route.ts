@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { db, customers } from "@rosie/db";
+import { db, customers, type NewCustomer } from "@rosie/db";
 import { loadActiveSession } from "@/lib/active-tenant";
 import { geocodeAndStamp } from "@/lib/geocode";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const SERVICE_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 type ServiceDay = (typeof SERVICE_DAYS)[number];
@@ -31,14 +31,16 @@ const Body = z.object({
   skipGeocode: z.boolean().optional(),
 });
 
+const GEOCODE_CONCURRENCY = 5;
+const INSERT_BATCH_SIZE = 100;
+
 /**
- * Bulk customer importer. The client parses the CSV (PapaParse / manual)
- * and POSTs an array of plain objects — we coerce + validate each row
- * server-side and return a per-row report.
+ * Bulk customer importer. The client parses the CSV and POSTs an array of
+ * plain objects — we validate every row, geocode addresses in parallel
+ * chunks, then issue *one* multi-row INSERT per batch.
  *
- * Geocoding runs sequentially with a 250ms space-out to stay under Mapbox's
- * free-tier rate limit. For huge imports, pass `skipGeocode: true` and
- * re-geocode in the background via the standard PATCH flow.
+ * Previous version did one INSERT per row + sequential geocoding, which
+ * exhausted the Supavisor connection pool and timed out on >25-row CSVs.
  */
 export async function POST(req: Request) {
   const session = await loadActiveSession();
@@ -47,73 +49,94 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid body" }, { status: 400 });
   }
 
+  type Validated = { rowIndex: number; data: z.infer<typeof RowSchema> };
   type ReportItem = { ok: true; id: string } | { ok: false; rowIndex: number; error: string };
+  const valid: Validated[] = [];
   const report: ReportItem[] = [];
-  let created = 0;
   let failed = 0;
 
+  // 1. Validate every row up front so the user sees all errors in one pass.
   for (let i = 0; i < parsed.data.rows.length; i++) {
-    const raw = parsed.data.rows[i] ?? {};
-    const coerced = coerce(raw);
-    const r = RowSchema.safeParse(coerced);
-    if (!r.success) {
+    const r = RowSchema.safeParse(coerce(parsed.data.rows[i] ?? {}));
+    if (r.success) {
+      valid.push({ rowIndex: i, data: r.data });
+    } else {
       failed++;
       report.push({
         ok: false,
         rowIndex: i,
         error: r.error.issues[0]?.message ?? "invalid",
       });
-      continue;
-    }
-    try {
-      const baseAddress = {
-        street: r.data.street,
-        city: r.data.city,
-        region: r.data.region,
-        postal: r.data.postal,
-        country: r.data.country,
-      };
-      const hasAnyAddressField = Object.values(baseAddress).some(Boolean);
-      const address = hasAnyAddressField
-        ? parsed.data.skipGeocode
-          ? baseAddress
-          : await geocodeAndStamp(baseAddress)
-        : undefined;
-
-      const [row] = await db
-        .insert(customers)
-        .values({
-          tenantId: session.tenant.id,
-          name: r.data.name,
-          phone: r.data.phone,
-          email: r.data.email,
-          address,
-          serviceDays: r.data.serviceDays ?? [],
-          zone: r.data.zone,
-          notes: r.data.notes,
-          pricePerVisitCents: r.data.pricePerVisitCents,
-          serviceSince: new Date(),
-        })
-        .returning({ id: customers.id });
-      if (row?.id) {
-        created++;
-        report.push({ ok: true, id: row.id });
-      }
-      // Polite delay so Mapbox doesn't 429 us mid-import.
-      if (!parsed.data.skipGeocode && hasAnyAddressField) {
-        await new Promise((res) => setTimeout(res, 250));
-      }
-    } catch (e) {
-      failed++;
-      report.push({
-        ok: false,
-        rowIndex: i,
-        error: e instanceof Error ? e.message : "insert failed",
-      });
     }
   }
 
-  return NextResponse.json({ ok: true, created, failed, total: parsed.data.rows.length, report });
+  // 2. Geocode in parallel chunks. Mapbox free-tier is 600 req/min; 5
+  //    concurrent calls leaves headroom for normal app traffic.
+  const skipGeocode = parsed.data.skipGeocode ?? false;
+  const geocoded: Array<NewCustomer & { rowIndex: number }> = [];
+  for (let i = 0; i < valid.length; i += GEOCODE_CONCURRENCY) {
+    const chunk = valid.slice(i, i + GEOCODE_CONCURRENCY);
+    const results = await Promise.all(
+      chunk.map(async ({ rowIndex, data }) => {
+        const base = {
+          street: data.street,
+          city: data.city,
+          region: data.region,
+          postal: data.postal,
+          country: data.country,
+        };
+        const hasAnyAddressField = Object.values(base).some(Boolean);
+        const address = hasAnyAddressField
+          ? skipGeocode
+            ? base
+            : await geocodeAndStamp(base)
+          : undefined;
+        return {
+          rowIndex,
+          tenantId: session.tenant.id,
+          name: data.name,
+          phone: data.phone,
+          email: data.email,
+          address,
+          serviceDays: data.serviceDays ?? [],
+          zone: data.zone,
+          notes: data.notes,
+          pricePerVisitCents: data.pricePerVisitCents,
+          serviceSince: new Date(),
+        } as NewCustomer & { rowIndex: number };
+      }),
+    );
+    geocoded.push(...results);
+  }
+
+  // 3. Bulk insert — one round-trip per INSERT_BATCH_SIZE rows. Beats per-row
+  //    inserts by ~100x on a 100-row CSV and avoids exhausting the pool.
+  let created = 0;
+  for (let i = 0; i < geocoded.length; i += INSERT_BATCH_SIZE) {
+    const batch = geocoded.slice(i, i + INSERT_BATCH_SIZE);
+    try {
+      const inserted = await db
+        .insert(customers)
+        .values(batch.map(({ rowIndex: _omit, ...row }) => row))
+        .returning({ id: customers.id });
+      created += inserted.length;
+      inserted.forEach((row) => report.push({ ok: true, id: row.id }));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "insert failed";
+      for (const row of batch) {
+        failed++;
+        report.push({ ok: false, rowIndex: row.rowIndex, error: message });
+      }
+    }
+  }
+
+  return NextResponse.json({
+    ok: true,
+    created,
+    failed,
+    total: parsed.data.rows.length,
+    report,
+  });
 }
 
 /**
