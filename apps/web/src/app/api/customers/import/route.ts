@@ -155,13 +155,28 @@ const HEADER_ALIASES: Record<string, string> = {
   fullname: "name",
   client: "name",
   clientname: "name",
-  // phone
+  // first / last name — combined into `name` post-coerce.
+  firstname: "firstName",
+  fname: "firstName",
+  givenname: "firstName",
+  lastname: "lastName",
+  lname: "lastName",
+  surname: "lastName",
+  familyname: "lastName",
+  // phone — accept "Cell Phone Number", "Mobile #", "Cell Phone N" (truncated header).
   phone: "phone",
   phonenumber: "phone",
+  phonen: "phone",
   mobile: "phone",
   mobilephone: "phone",
+  mobilephonenumber: "phone",
+  mobilen: "phone",
   cell: "phone",
   cellphone: "phone",
+  cellphonenumber: "phone",
+  cellphonen: "phone",
+  homephone: "phone",
+  workphone: "phone",
   contact: "phone",
   // email
   email: "email",
@@ -172,6 +187,8 @@ const HEADER_ALIASES: Record<string, string> = {
   address1: "street",
   addressline1: "street",
   streetaddress: "street",
+  propertyaddress: "street",
+  serviceaddress: "street",
   city: "city",
   town: "city",
   region: "region",
@@ -187,6 +204,7 @@ const HEADER_ALIASES: Record<string, string> = {
   days: "serviceDays",
   schedule: "serviceDays",
   serviceday: "serviceDays",
+  servicefrequency: "serviceDays",
   // zone / notes
   zone: "zone",
   route: "zone",
@@ -201,6 +219,12 @@ const HEADER_ALIASES: Record<string, string> = {
   pricepervisitcents: "pricePerVisitCents",
   rate: "pricePerVisit",
   cost: "pricePerVisit",
+  // status
+  status: "status",
+  customerstatus: "status",
+  // referral metadata — folded into notes during coerce so it isn't lost.
+  referralsource: "referralSource",
+  referralsourcedetails: "referralSourceDetails",
 };
 
 function canonicalKey(raw: string): string | null {
@@ -242,5 +266,40 @@ function coerce(raw: Record<string, unknown>): Record<string, unknown> {
     if (Number.isFinite(n)) out.pricePerVisitCents = Math.round(n * 100);
     delete out.pricePerVisit;
   }
+
+  // Combine First + Last → name when the source CSV doesn't have a single
+  // name column. Either field alone is fine ("Cher" + missing last name).
+  if (!out.name && (out.firstName || out.lastName)) {
+    out.name = [out.firstName, out.lastName]
+      .filter((v): v is string => typeof v === "string" && v.length > 0)
+      .join(" ")
+      .trim();
+  }
+  delete out.firstName;
+  delete out.lastName;
+
+  // Status normalization — operator CSVs use "Active"/"Inactive"/"Past" etc.
+  if (typeof out.status === "string") {
+    const s = out.status.toLowerCase();
+    if (s === "active" || s === "current" || s === "on") out.status = "active";
+    else if (s === "paused" || s === "inactive" || s === "hold" || s === "on hold")
+      out.status = "paused";
+    else if (s === "cancelled" || s === "canceled" || s === "past" || s === "lost" || s === "closed")
+      out.status = "cancelled";
+    else delete out.status; // Unknown value — let DB default (`active`) win.
+  }
+
+  // Fold referral context into notes so the operator doesn't lose it.
+  const referralBits: string[] = [];
+  if (typeof out.referralSource === "string") referralBits.push(`Referral: ${out.referralSource}`);
+  if (typeof out.referralSourceDetails === "string")
+    referralBits.push(out.referralSourceDetails as string);
+  if (referralBits.length > 0) {
+    const existing = typeof out.notes === "string" ? `${out.notes}\n` : "";
+    out.notes = `${existing}${referralBits.join(" — ")}`.slice(0, 2000);
+  }
+  delete out.referralSource;
+  delete out.referralSourceDetails;
+
   return out;
 }
