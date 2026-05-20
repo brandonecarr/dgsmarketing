@@ -52,6 +52,7 @@ export function CustomersView({ initial }: { initial: CustomerRow[] }) {
   const [importReport, setImportReport] = useState<{
     created: number;
     failed: number;
+    skipped: number;
     total: number;
     errors: Array<{ rowIndex: number; error: string }>;
   } | null>(null);
@@ -101,11 +102,12 @@ export function CustomersView({ initial }: { initial: CustomerRow[] }) {
         return;
       }
       const errors: Array<{ rowIndex: number; error: string }> = (j.report ?? [])
-        .filter((r: { ok: boolean }) => !r.ok)
+        .filter((r: { ok: boolean; error?: string }) => !r.ok && r.error !== "duplicate")
         .slice(0, 20);
       setImportReport({
         created: j.created ?? 0,
         failed: j.failed ?? 0,
+        skipped: j.skipped ?? 0,
         total: j.total ?? records.length,
         errors,
       });
@@ -186,16 +188,24 @@ export function CustomersView({ initial }: { initial: CustomerRow[] }) {
               <div>
                 <h3 className="text-base font-semibold">
                   Import: {importReport.created} of {importReport.total} added
+                  {importReport.skipped > 0
+                    ? ` · ${importReport.skipped} skipped as duplicates`
+                    : ""}
                   {importReport.failed > 0 ? ` · ${importReport.failed} failed` : ""}
                 </h3>
-                {importReport.failed === 0 ? (
+                {importReport.failed === 0 && importReport.skipped === 0 ? (
                   <p className="text-xs text-emerald-700 dark:text-emerald-300">
                     Everything imported cleanly.
                   </p>
+                ) : importReport.failed === 0 ? (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    Duplicates are detected by (name + email + phone). Skipped rows already exist
+                    in your customer list.
+                  </p>
                 ) : (
                   <p className="text-xs text-[hsl(var(--muted-foreground))]">
-                    First {importReport.errors.length} errors shown below — the rest are the same
-                    issue.
+                    First {importReport.errors.length} non-duplicate errors shown below — the rest
+                    are the same issue.
                   </p>
                 )}
               </div>

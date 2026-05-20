@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db, customers, type NewCustomer } from "@rosie/db";
+import { eq } from "@rosie/db";
 import { loadActiveSession } from "@/lib/active-tenant";
 import { geocodeAndStamp } from "@/lib/geocode";
 
@@ -29,10 +30,27 @@ const Body = z.object({
   rows: z.array(z.record(z.unknown())).min(1).max(1000),
   /** Skip Mapbox geocoding entirely (eg you already have lat/lng). */
   skipGeocode: z.boolean().optional(),
+  /**
+   * When true (default), rows matching an existing customer on
+   * (name, email, digits-only phone) are skipped and reported as
+   * `duplicate`. Pass `false` to force-insert.
+   */
+  dedupe: z.boolean().optional(),
 });
 
 const GEOCODE_CONCURRENCY = 5;
 const INSERT_BATCH_SIZE = 100;
+
+/** Normalize a string for dedup key construction. */
+function norm(s: string | null | undefined): string {
+  return (s ?? "").trim().toLowerCase();
+}
+function normPhone(s: string | null | undefined): string {
+  return (s ?? "").replace(/\D/g, "");
+}
+function dedupeKey(args: { name: string; email?: string | null; phone?: string | null }): string {
+  return `${norm(args.name)}|${norm(args.email)}|${normPhone(args.phone)}`;
+}
 
 /**
  * Bulk customer importer. The client parses the CSV and POSTs an array of
@@ -50,24 +68,69 @@ export async function POST(req: Request) {
   }
 
   type Validated = { rowIndex: number; data: z.infer<typeof RowSchema> };
-  type ReportItem = { ok: true; id: string } | { ok: false; rowIndex: number; error: string };
+  type ReportItem =
+    | { ok: true; id: string }
+    | { ok: false; rowIndex: number; error: string }
+    | { ok: false; rowIndex: number; error: "duplicate"; duplicateOf?: string };
   const valid: Validated[] = [];
   const report: ReportItem[] = [];
   let failed = 0;
+  let skipped = 0;
+
+  // Pre-load every existing customer's dedupe key so we can decide row-by-row
+  // without round-tripping. One SELECT beats N lookups by a mile.
+  const dedupeEnabled = parsed.data.dedupe ?? true;
+  const existingKeys = new Map<string, string>(); // key → existing customer id
+  if (dedupeEnabled) {
+    const existing = await db
+      .select({
+        id: customers.id,
+        name: customers.name,
+        email: customers.email,
+        phone: customers.phone,
+      })
+      .from(customers)
+      .where(eq(customers.tenantId, session.tenant.id));
+    for (const c of existing) {
+      existingKeys.set(dedupeKey({ name: c.name, email: c.email, phone: c.phone }), c.id);
+    }
+  }
+  // Track dedupe keys we've already seen in *this* upload so an internally
+  // duplicated CSV doesn't pass through unnoticed.
+  const seenInThisUpload = new Set<string>();
 
   // 1. Validate every row up front so the user sees all errors in one pass.
   for (let i = 0; i < parsed.data.rows.length; i++) {
     const r = RowSchema.safeParse(coerce(parsed.data.rows[i] ?? {}));
-    if (r.success) {
-      valid.push({ rowIndex: i, data: r.data });
-    } else {
+    if (!r.success) {
       failed++;
       report.push({
         ok: false,
         rowIndex: i,
         error: r.error.issues[0]?.message ?? "invalid",
       });
+      continue;
     }
+    if (dedupeEnabled) {
+      const key = dedupeKey({
+        name: r.data.name,
+        email: r.data.email,
+        phone: r.data.phone,
+      });
+      const existingId = existingKeys.get(key);
+      if (existingId) {
+        skipped++;
+        report.push({ ok: false, rowIndex: i, error: "duplicate", duplicateOf: existingId });
+        continue;
+      }
+      if (seenInThisUpload.has(key)) {
+        skipped++;
+        report.push({ ok: false, rowIndex: i, error: "duplicate" });
+        continue;
+      }
+      seenInThisUpload.add(key);
+    }
+    valid.push({ rowIndex: i, data: r.data });
   }
 
   // 2. Geocode in parallel chunks. Mapbox free-tier is 600 req/min; 5
@@ -134,6 +197,7 @@ export async function POST(req: Request) {
     ok: true,
     created,
     failed,
+    skipped,
     total: parsed.data.rows.length,
     report,
   });
